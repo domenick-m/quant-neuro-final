@@ -3,3 +3,4 @@ to set up NLB tools:
 - either `git submodule update --init` or `git submodule init` not sure which worked
 - cd nlb_tools
 - pip install -e .
+- wandb login
