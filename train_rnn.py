@@ -29,7 +29,7 @@ DATASET = 'mc_maze_small' # NLB name of dataset
 
 WANDB_PROJECT = 'quantNeuroTest' # name of wandb project
 WANDB_ENTITY = 'forrealahmad' # wandb username (change to yours)
-PATIENCE = 5
+PATIENCE = 20
 MIN_EPOCH = 100
 
 
@@ -130,7 +130,7 @@ val_dataset = TensorDataset(val_spikes_tensor, val_behavior_tensor)
 
 # Set up the sweep configuration
 sweep_config = {
-    "name": "rnn-random_sweep03",
+    "name": "rnn-random_sweep04",
     "method": "random",
     "parameters": {
         "num_layers": {"values": RNN_LAYERS},
