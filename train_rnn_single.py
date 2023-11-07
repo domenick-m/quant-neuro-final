@@ -19,6 +19,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from nlb_tools.make_tensors import make_train_input_tensors, make_eval_input_tensors, make_eval_target_tensors, save_to_h5
 from rnnmodel import RNNMODEL
 
+
 #%% ----------------------------------------------------------------------------
 # Static Parameters
 # ------------------------------------------------------------------------------
@@ -121,83 +122,49 @@ output_size = train_behavior_tensor.size()[-1]
 
 train_dataset = TensorDataset(train_spikes_tensor, train_behavior_tensor)
 val_dataset = TensorDataset(val_spikes_tensor, val_behavior_tensor)
+train_loader = DataLoader(train_dataset, batch_size=RNN_BATCH_SIZE[temp_hp_combo], shuffle=True)
+val_loader = DataLoader(val_dataset, batch_size=RNN_BATCH_SIZE[temp_hp_combo], shuffle=False)  
 
 
 #%% -----------------------------------
-# Run a sweep on hyperparameters
+# Run a single run
 # -------------------------------------
-
-# Set up the sweep configuration
-sweep_config = {
-    "name": "rnn-sweep1",
-    "method": "grid",
-    "parameters": {
-        "num_layers": {"values": RNN_LAYERS},
-        "hidden_size": {"values": RNN_HIDDEN_SIZE},
-        "dropout": {"values": RNN_DROPOUT},
-        "lr": {"values": RNN_LR},
-        "rnn_epochs": {"values": RNN_EPOCHS},
-        "batch_size": {"values": RNN_BATCH_SIZE}
-    }
-}
+wandb.init(project=WANDB_PROJECT, entity=WANDB_ENTITY, name=f'RNN_{temp_hp_combo}')
 
 
-#%%
+# Set up the RNN model, optimizer, and loss function
+model = RNNMODEL(input_size=input_size, num_layers=RNN_LAYERS[temp_hp_combo], hidden_size=RNN_HIDDEN_SIZE[temp_hp_combo], dropout=RNN_DROPOUT[temp_hp_combo]).to(device)
+optimizer = optim.Adam(model.parameters(), lr=RNN_LR[1])
+mse_loss = nn.MSELoss()
 
-def train_sweep(config=None):
-    with wandb.init(config=config):
-        print(wandb.config)
-        num_layers = wandb.config.num_layers
-        hidden_size = wandb.config.hidden_size
-        dropout = wandb.config.dropout
-        lr = wandb.config.lr
-        rnn_epochs = wandb.config.rnn_epochs
-        batch_size = wandb.config.batch_size
+# Training loop
+for epoch in range(RNN_EPOCHS[temp_hp_combo]):
+    model.train()
+    total_loss = 0
+    for batch_idx, (spikes, behavior) in enumerate(train_loader):
+        optimizer.zero_grad()
+        output = model(spikes)
+        loss = mse_loss(output, behavior)
+        loss.backward()
+        optimizer.step()
+        total_loss += loss.item()
 
+    # Validation loop
+    model.eval()
+    val_loss = 0
+    mse_loss = nn.MSELoss()
+    with torch.no_grad():
+        for batch_idx, (spikes, behavior) in enumerate(val_loader):
+            spikes, behavior = spikes.to(device), behavior.to(device)
+            output = model(spikes)
+            loss = mse_loss(output, behavior)
+            val_loss += loss.item()
 
-        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-        val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)  
+    # Log training and validation loss to Weights and Biases
+    wandb.log({"train_loss": total_loss / len(train_loader), "val_loss": val_loss / len(val_loader), "epoch": epoch})
 
-        # Set up the RNN model with the current configuration
-        model = RNNMODEL(
-            input_size=input_size, 
-            hidden_size=hidden_size,
-            num_layers=num_layers,
-            dropout=dropout)
+# Save the trained model
+torch.save(model.state_dict(), "rnn_model.pth")
+wandb.save("rnn_model.pth")  # Save the model to Weights and Biases
 
-        mse_loss = nn.MSELoss()
-
-        optimizer = optim.Adam(model.parameters(), lr=lr)
-
-        # Training loop
-        for epoch in range(rnn_epochs):
-            model.train()
-            total_loss = 0
-            for batch_idx, (spikes, behavior) in enumerate(train_loader):
-                optimizer.zero_grad()
-                output = model(spikes)
-                loss = mse_loss(output, behavior)
-                loss.backward()
-                optimizer.step()
-                total_loss += loss.item()
-
-            # Log the training loss to Weights and Biases
-            wandb.log({"train_loss": total_loss / len(train_loader), "epoch": epoch})
-
-            # Validation loop
-            model.eval()
-            val_loss = 0
-            with torch.no_grad():
-                for batch_idx, (spikes, behavior) in enumerate(val_loader):
-                    output = model(spikes)
-                    loss = mse_loss(output, behavior)
-                    val_loss += loss.item()
-
-            # Log the validation loss to Weights and Biases
-            wandb.log({"ave_val_loss": val_loss / len(val_loader),  "epoch": epoch})
-
-# Initialize the sweep
-sweep_id = wandb.sweep(sweep=sweep_config, project='QunatNeuroRNNSweeo')
-# Run the sweep
-wandb.agent(sweep_id, function=train_sweep)
-
+wandb.finish()

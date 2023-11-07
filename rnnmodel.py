@@ -5,7 +5,7 @@ import torch.nn as nn
 
 class RNNMODEL(nn.Module):
     def __init__(self, input_size = None, hidden_size=None, num_layers=None, readout_size=2, dropout = 0.1, gru_kwargs={}, readout_kwargs={}):
-        super().__init__()
+        super(RNNMODEL,self).__init__()
         params = [input_size, hidden_size, num_layers]
         if None in params:
             raise Exception
@@ -14,9 +14,11 @@ class RNNMODEL(nn.Module):
         self.readout_size = readout_size
         self.gru_kwargs = gru_kwargs
         self.readout_kwargs = readout_kwargs
-        self.gru = nn.GRU(hidden_size=self.hidden_size,
-                          num_layers=self.num_layers,
-                          **gru_kwargs
+        self.gru = nn.GRU(
+            input_size=input_size,
+            hidden_size=self.hidden_size,
+            num_layers=self.num_layers,
+            **gru_kwargs
         )
         self.readout = nn.Linear(in_features=self.hidden_size, out_features=self.readout_size)
 
