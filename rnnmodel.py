@@ -18,6 +18,7 @@ class RNNMODEL(nn.Module):
             input_size=input_size,
             hidden_size=self.hidden_size,
             num_layers=self.num_layers,
+            dropout=dropout,
             **gru_kwargs
         )
         self.readout = nn.Linear(in_features=self.hidden_size, out_features=self.readout_size)

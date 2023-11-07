@@ -29,6 +29,8 @@ DATASET = 'mc_maze_small' # NLB name of dataset
 
 WANDB_PROJECT = 'quantNeuroTest' # name of wandb project
 WANDB_ENTITY = 'forrealahmad' # wandb username (change to yours)
+PATIENCE = 5
+MIN_EPOCH = 100
 
 
 #%% ----------------------------------------------------------------------------
@@ -38,11 +40,10 @@ WANDB_ENTITY = 'forrealahmad' # wandb username (change to yours)
 RNN_LAYERS = [1, 2, 3, 4, 5] # number of layers to try for RNN
 RNN_HIDDEN_SIZE = [32, 64, 128, 256] # hidden size for RNN
 RNN_DROPOUT = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7] # dropout for RNN
-RNN_LR = [0.0001, 0.001, 0.01] # learning rate for RNN
-RNN_EPOCHS = [100, 500, 1000] # number of epochs to train RNN for
+RNN_LR = [0.001, 0.01] # learning rate for RNN
+RNN_EPOCHS = [1000] # number of epochs to train RNN for
 RNN_BATCH_SIZE = [32, 64, 128, 256] # batch size for RNN
 
-temp_hp_combo = 2
 #%% ----------------------------------------------------------------------------
 # Dataset Set Up
 # ------------------------------------------------------------------------------
@@ -129,8 +130,8 @@ val_dataset = TensorDataset(val_spikes_tensor, val_behavior_tensor)
 
 # Set up the sweep configuration
 sweep_config = {
-    "name": "rnn-sweep1",
-    "method": "grid",
+    "name": "rnn-random_sweep03",
+    "method": "random",
     "parameters": {
         "num_layers": {"values": RNN_LAYERS},
         "hidden_size": {"values": RNN_HIDDEN_SIZE},
@@ -141,10 +142,29 @@ sweep_config = {
     }
 }
 
+#%% -------------------------------------
+# Custom Loss
+# ---------------------------------------
+class CosineSimilarityLoss(nn.Module):
+    def __init__(self):
+        super(CosineSimilarityLoss, self).__init__()
+        self.cosine_similarity = nn.CosineSimilarity(dim=1, eps=1e-6)
+
+    def forward(self, predicted_vectors, target_vectors):
+        # Compute cosine similarity between predicted and target vectors
+        cos_sim = self.cosine_similarity(predicted_vectors, target_vectors)
+        # Compute 1 minus cosine similarity as the loss
+        loss = 1 - cos_sim.mean()
+        return loss
 
 #%%
+best_val_loss = float('inf')
 
 def train_sweep(config=None):
+
+
+    best_val_loss = float('inf')
+
     with wandb.init(config=config):
         print(wandb.config)
         num_layers = wandb.config.num_layers
@@ -195,9 +215,17 @@ def train_sweep(config=None):
 
             # Log the validation loss to Weights and Biases
             wandb.log({"ave_val_loss": val_loss / len(val_loader),  "epoch": epoch})
-
+                # Check for early stopping
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                counter = 0
+            else:
+                counter += 1
+                if counter >= PATIENCE and epoch>=MIN_EPOCH:
+                    print("Early stopping triggered.")
+                    break
 # Initialize the sweep
-sweep_id = wandb.sweep(sweep=sweep_config, project='QunatNeuroRNNSweeo')
+sweep_id = wandb.sweep(sweep=sweep_config, project='QunatNeuroRNNSweep')
 # Run the sweep
 wandb.agent(sweep_id, function=train_sweep)
 
