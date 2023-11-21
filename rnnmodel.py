@@ -4,7 +4,16 @@ import torch.nn as nn
 
 
 class RNNMODEL(nn.Module):
-    def __init__(self, input_size = None, hidden_size=None, num_layers=None, readout_size=2, dropout = 0.1, gru_kwargs={}, readout_kwargs={}):
+    def __init__(
+        self, 
+        input_size = None, 
+        hidden_size=None, 
+        num_layers=None, 
+        readout_size=2, 
+        dropout = 0.1, 
+        gru_kwargs={}, 
+        readout_kwargs={}
+    ):
         super(RNNMODEL,self).__init__()
         params = [input_size, hidden_size, num_layers]
         if None in params:
@@ -14,20 +23,27 @@ class RNNMODEL(nn.Module):
         self.readout_size = readout_size
         self.gru_kwargs = gru_kwargs
         self.readout_kwargs = readout_kwargs
-        self.gru = nn.GRU(
-            input_size=input_size,
-            hidden_size=self.hidden_size,
-            num_layers=self.num_layers,
-            dropout=dropout,
-            **gru_kwargs
-        )
-        self.readout = nn.Linear(in_features=self.hidden_size, out_features=self.readout_size)
+        self.layer_norm = nn.LayerNorm(hidden_size)
+        self.norms = nn.ModuleList()
+        self.grus = nn.ModuleList()
+        for _ in range(self.num_layers):
+            self.grus.append(nn.GRU(input_size=input_size, 
+                                    hidden_size=hidden_size, 
+                                    num_layers=1, 
+                                    dropout=dropout, 
+                                    **gru_kwargs))
+            input_size = hidden_size
+            # self.norms.append(nn.BatchNorm1d(hidden_size))
+            self.norms.append(nn.LayerNorm(hidden_size))
+        self.readout = nn.Linear(in_features=self.hidden_size, 
+                                 out_features=self.readout_size)
 
 
     def forward(self, x):
-
-        gru_out, _ = self.gru(x)
-        readout_out = self.readout(gru_out)
+        for i in range(self.num_layers):
+            x, _ = self.grus[i](x)
+            # x = self.norms[i](x)
+        readout_out = self.readout(x)
         return readout_out
 
 

@@ -9,6 +9,7 @@ import torch.nn as nn
 from pathlib import Path
 import torch.optim as optim
 import scipy.signal as signal
+import matplotlib.pyplot as plt
 from sklearn.metrics import r2_score
 from sklearn.linear_model import Ridge
 from nlb_tools.evaluation import evaluate
@@ -26,7 +27,7 @@ from rnnmodel import RNNMODEL
 BINSIZE = 5 # ms - bin size for resampling
 LAG = 100 # ms - how much to delay the kinematics by
 SMOOTH_SD = 40 # ms - std of gaussian kernel for smoothing
-DATASET = 'mc_maze_medium' # NLB name of dataset
+DATASET = 'mc_maze' # NLB name of dataset
 
 WANDB_PROJECT = 'quantNeuroTest' # name of wandb project
 WANDB_ENTITY = 'domenick-m' # wandb username (change to yours)
@@ -35,16 +36,14 @@ WANDB_ENTITY = 'domenick-m' # wandb username (change to yours)
 #%% ----------------------------------------------------------------------------
 # Hyperparameters
 # ------------------------------------------------------------------------------
+RNN_LAYERS = 1
+RNN_HIDDEN_SIZE = 64
+RNN_DROPOUT = 0.3 
+RNN_LR = 0.001 
+RNN_EPOCHS = 1000
+RNN_BATCH_SIZE = 32
 
-RNN_LAYERS = [1, 2, 3, 4, 5] # number of layers to try for RNN
-RNN_HIDDEN_SIZE = [32, 64, 128, 256] # hidden size for RNN
-RNN_DROPOUT = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7] # dropout for RNN
-RNN_LR = [0.0001, 0.001, 0.01] # learning rate for RNN
-RNN_EPOCHS = [100, 100, 100] # number of epochs to train RNN for
-# RNN_EPOCHS = [100, 500, 1000] # number of epochs to train RNN for
-RNN_BATCH_SIZE = [32, 64, 128, 256] # batch size for RNN
 
-temp_hp_combo = 1
 #%% ----------------------------------------------------------------------------
 # Dataset Set Up
 # ------------------------------------------------------------------------------
@@ -68,7 +67,8 @@ if not data_folder.exists():
 
 # get the path to the folder inside the data folder
 data_path = next((p for p in data_folder.iterdir() if p.is_dir()), None)
-print(data_path)
+
+
 #%% ----------------------------------------------------------------------------
 # Prepare / Preprocess Data
 # ------------------------------------------------------------------------------
@@ -109,7 +109,6 @@ train_spikes, val_spikes, train_behavior, val_behavior = tv_splits
 #%% ----------------------------------------------------------------------------
 # Prepare data for training 
 # ------------------------------------------------------------------------------
-
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 train_spikes_tensor = torch.Tensor(train_spikes, device=device)
@@ -123,54 +122,103 @@ output_size = train_behavior_tensor.size()[-1]
 
 train_dataset = TensorDataset(train_spikes_tensor, train_behavior_tensor)
 val_dataset = TensorDataset(val_spikes_tensor, val_behavior_tensor)
-train_loader = DataLoader(train_dataset, batch_size=RNN_BATCH_SIZE[temp_hp_combo], shuffle=True)
-val_loader = DataLoader(val_dataset, batch_size=RNN_BATCH_SIZE[temp_hp_combo], shuffle=False)  
+train_loader = DataLoader(train_dataset, batch_size=RNN_BATCH_SIZE, shuffle=True)
+val_loader = DataLoader(val_dataset, batch_size=RNN_BATCH_SIZE, shuffle=False)  
 
 
 #%% -----------------------------------
 # Run a single run
 # -------------------------------------
-wandb.init(project=WANDB_PROJECT, entity=WANDB_ENTITY, name=f'RNN_{temp_hp_combo}')
-
+wandb.init(project=WANDB_PROJECT, entity=WANDB_ENTITY, name=f'RNN_test')
 
 # Set up the RNN model, optimizer, and loss function
-model = RNNMODEL(input_size=input_size, num_layers=RNN_LAYERS[temp_hp_combo], hidden_size=RNN_HIDDEN_SIZE[temp_hp_combo], dropout=RNN_DROPOUT[temp_hp_combo]).to(device)
-optimizer = optim.AdamW(model.parameters(), lr=RNN_LR[1])
+model = RNNMODEL(input_size=input_size, 
+                 num_layers=RNN_LAYERS, 
+                 hidden_size=RNN_HIDDEN_SIZE, 
+                 dropout=RNN_DROPOUT).to(device)
+optimizer = optim.AdamW(model.parameters(), lr=RNN_LR)
 mse_loss = nn.MSELoss()
 
 # Training loop
-for epoch in range(RNN_EPOCHS[temp_hp_combo]):
+for epoch in range(RNN_EPOCHS):
     model.train()
-    total_loss = 0
+    total_loss, total_r2 = 0, 0
     for batch_idx, (spikes, behavior) in enumerate(train_loader):
         optimizer.zero_grad()
         output = model(spikes)
         loss = mse_loss(output, behavior)
+        r2 = r2_score(output.reshape((-1, output_size)).detach().cpu().numpy(), 
+                      behavior.reshape((-1, output_size)).detach().cpu().numpy(), 
+                      multioutput='uniform_average')
         loss.backward()
         optimizer.step()
         total_loss += loss.item()
+        total_r2 += r2.item()
 
     # Validation loop
     model.eval()
-    val_loss = 0
-    mse_loss = nn.MSELoss()
+    val_loss, val_r2 = 0, 0
     with torch.no_grad():
         for batch_idx, (spikes, behavior) in enumerate(val_loader):
             spikes, behavior = spikes.to(device), behavior.to(device)
             output = model(spikes)
             loss = mse_loss(output, behavior)
+            r2 = r2_score(output.reshape((-1, output_size)), 
+                          behavior.reshape((-1, output_size)), 
+                          multioutput='uniform_average')
             val_loss += loss.item()
+            val_r2 += r2.item()
 
+    print(f"Epoch {epoch} | Train Loss {total_loss / len(train_loader)} | Val Loss {val_loss / len(val_loader)} | Train R2 {total_r2 / len(train_loader)} | Val R2 {val_r2 / len(val_loader)}")
     # Log training and validation loss to Weights and Biases
-    wandb.log({"train_loss": total_loss / len(train_loader), "val_loss": val_loss / len(val_loader), "epoch": epoch})
+    wandb.log({"train_loss": total_loss / len(train_loader), 
+               "val_loss": val_loss / len(val_loader), 
+               "train_r2": total_r2 / len(train_loader),
+               "val_r2": val_r2 / len(val_loader),
+               "epoch": epoch})
 
 # Save the trained model
 torch.save(model.state_dict(), "rnn_model.pth")
-wandb.save("rnn_model.pth")  # Save the model to Weights and Biases
+# wandb.save("rnn_model.pth")  # Save the model to Weights and Biases
 
 wandb.finish()
 
-#%%
-for test in val_loader:
-    print(len(test))
+#%% ----------------------------------------------------------------------------
+# Evaluate the trained model
+# ------------------------------------------------------------------------------
+outputs, gt_behav = [], []
+from torcheval.metrics.functional import r2_score
 
+model.eval()
+for spikes, behavior in zip(val_spikes_tensor, val_behavior_tensor):
+    val_loss, val_r2 = 0, 0
+    with torch.no_grad():
+        spikes, behavior = spikes.to(device), behavior.to(device)
+        output = model(spikes)
+        outputs.append(output)
+        gt_behav.append(behavior)
+
+        loss = mse_loss(output, behavior)
+        val_loss += loss.item()
+
+        r2_val = r2_score(output, behavior, multioutput='uniform_average')
+        val_r2 += r2_val.item()
+
+
+#%% ----------------------------------------------------------------------------
+# Plot some trials
+# ------------------------------------------------------------------------------
+trials = [0, 1, 2, 3, 4]
+fig, axs = plt.subplots(2, 5, figsize=(40, 10))
+for idx, i in enumerate(range(5)):
+    axs[0, idx].plot(outputs[i].cpu().numpy()[:, 0], label='pred')
+    axs[0, idx].plot(gt_behav[i].cpu().numpy()[:, 0], label='gt')
+    axs[0, idx].legend()
+    axs[0, idx].set_title(f'X Velocity - Trial:{i}')
+    axs[1, idx].plot(outputs[i].cpu().numpy()[:, 1], label='pred')
+    axs[1, idx].plot(gt_behav[i].cpu().numpy()[:, 1], label='gt')
+    axs[1, idx].set_title(f'Y Velocity - Trial:{i}')
+plt.show()
+
+
+# %%

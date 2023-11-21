@@ -1,0 +1,1 @@
+from joblib import load; ridge_model = load('ridge_model.joblib')
