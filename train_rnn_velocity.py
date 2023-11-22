@@ -6,6 +6,7 @@ import yaml
 import torch
 import wandb
 import shutil
+import argparse
 import numpy as np
 import torch.nn as nn
 from joblib import dump
@@ -19,10 +20,19 @@ from rnn_model import RNNModel
 
 
 #%% ----------------------------------------------------------------------------
+# Parse command line arguments
+# ------------------------------------------------------------------------------
+parser = argparse.ArgumentParser()
+parser.add_argument('--add', type=str, default=None, help='Add sweep agent to specified sweep ID.')
+parser.add_argument('--gpu', type=int, default=None, help='GPU to add agent to.')
+args = parser.parse_args()
+
+
+#%% ----------------------------------------------------------------------------
 # Setup
 # ------------------------------------------------------------------------------
 # Which GPU should we train on (if available)
-GPU = 2
+GPU = 2 if args.gpu is None else args.gpu
 NUM_RUNS = 100
 
 # Load config parameters from file
@@ -79,6 +89,9 @@ sweep_config = {
 # Function to train GRU using random search over HPs
 # ------------------------------------------------------------------------------
 def train():
+    device = torch.device(f'cuda:{GPU}' if torch.cuda.is_available() else 'cpu')
+    print(f'Using device: {device}')
+
     # Initialize a new wandb run
     wandb.init()
     
@@ -91,7 +104,8 @@ def train():
     hidden_size = wandb.config.hidden_size
 
     # Give the run a new name to reflect the hyperparameters
-    wandb.run.name = f'lr_{lr}_drop_{dropout}_layers_{n_layers}_epochs_{n_epochs}_bsz_{batch_size}_hsz_{hidden_size}'
+    wandb.run.name = f'lr_{lr}_drop_{dropout}_layers_{n_layers}_' \
+                     f'epochs_{n_epochs}_bsz_{batch_size}_hsz_{hidden_size}'
     wandb.run.save()
 
     train_dl = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
@@ -102,10 +116,14 @@ def train():
                      hidden_size=hidden_size,
                      num_layers=n_layers,
                      dropout=dropout)
+    model = model.to(device)
 
     # Set up loss and optimizer
     mse_loss = nn.MSELoss()
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
+
+    # Save a checkpoint at the best validation loss
+    best_val_loss = float('inf')
 
     # Training loop
     for epoch in range(n_epochs):
@@ -113,12 +131,16 @@ def train():
         model.train()
         train_loss, train_r2 = 0, 0
         for spikes, behavior in train_dl:
+            # send data to GPU
+            spikes, behavior = spikes.to(device), behavior.to(device)
+
             # Forward pass through model
             pred_vel = model(spikes)
 
             # Calculate loss
             loss = mse_loss(pred_vel, behavior)
-            r2 = r2_score(pred_vel.reshape((-1, 2)), behavior.reshape((-1, 2)))
+            r2 = r2_score(pred_vel.reshape((-1, 2)), 
+                          behavior.reshape((-1, 2)))
             train_loss += loss.cpu().detach().numpy()
             train_r2 += r2.cpu().detach().numpy()
 
@@ -137,6 +159,7 @@ def train():
         val_loss, val_r2 = 0, 0
         with torch.no_grad():
             for spikes, behavior in val_dl:
+                spikes, behavior = spikes.to(device), behavior.to(device)
                 pred_vel = model(spikes)
                 loss = mse_loss(pred_vel, behavior)
                 r2 = r2_score(pred_vel.reshape((-1, 2)), behavior.reshape((-1, 2)))
@@ -144,12 +167,18 @@ def train():
                 val_r2 += r2.cpu().numpy()
 
         # Log the validation loss to Weights and Biases
-        wandb.log({"val_loss": val_loss / len(val_dl),  
+        avg_val_loss = val_loss / len(val_dl)
+        wandb.log({"val_loss": avg_val_loss,  
                    "val_r2": val_r2 / len(val_dl),
                    "epoch": epoch})
+        
+        # Save a checkpoint if this is the best validation loss
+        if avg_val_loss < best_val_loss:
+            best_val_loss = avg_val_loss
+            torch.save(model.state_dict(), os.path.join(runs_folder, f'{wandb.run.name}-best.pth'))
 
     # Save the trained model
-    torch.save(model.state_dict(), os.path.join(runs_folder, f'{wandb.run.name}.pth'))
+    torch.save(model.state_dict(), os.path.join(runs_folder, f'{wandb.run.name}-last.pth'))
 
     # Close wandb run
     wandb.finish()
@@ -158,12 +187,16 @@ def train():
 # ------------------------------------------------------------------------------
 # Start random search sweep and init an agent
 # ------------------------------------------------------------------------------
-# Initialize the sweep
-sweep_id = wandb.sweep(sweep=sweep_config, 
-                       project=wand_proj_name, 
-                       entity=config["WANDB_ENTITY"])
-# Start a sweep agent
-wandb.agent(sweep_id, function=train, count=NUM_RUNS)
+if args.add is None:
+    # Initialize the sweep
+    sweep_id = wandb.sweep(sweep=sweep_config, 
+                        project=wand_proj_name, 
+                        entity=config["WANDB_ENTITY"])
+    # Start a sweep agent
+    wandb.agent(sweep_id, function=train, count=NUM_RUNS)
+else:
+    # Add an agent to the sweep
+    wandb.agent(args.add, function=train, count=NUM_RUNS)
 
 
 # ------------------------------------------------------------------------------
@@ -182,5 +215,6 @@ for run in sweep.runs:
         best_run_name = run.name
 
 # Copy the best model from the runs folder
-best_model_path = os.path.join(runs_folder, f'{best_run_name}.pth')
+best_model_path = os.path.join(runs_folder, f'{best_run_name}-best.pth')
+# best_model_path = os.path.join(runs_folder, f'{best_run_name}-last.pth')
 shutil.copy(best_model_path, 'rnn_model_velocity.pth')

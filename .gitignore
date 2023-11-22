@@ -162,6 +162,6 @@ garbage/*
 runs/*
 data/*
 wandb/*
-wandb-runs/*
+wandb_runs/*
 domenick-m/*
 forrealahmad/*
