@@ -32,7 +32,7 @@ args = parser.parse_args()
 # Setup
 # ------------------------------------------------------------------------------
 # Which GPU should we train on (if available)
-GPU = 2 if args.gpu is None else args.gpu
+GPU = 0 if args.gpu is None else args.gpu
 NUM_RUNS = 100
 
 # Load config parameters from file
@@ -106,7 +106,6 @@ def train():
     # Give the run a new name to reflect the hyperparameters
     wandb.run.name = f'lr_{lr}_drop_{dropout}_layers_{n_layers}_' \
                      f'epochs_{n_epochs}_bsz_{batch_size}_hsz_{hidden_size}'
-    wandb.run.save()
 
     train_dl = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     val_dl = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)  
@@ -153,7 +152,7 @@ def train():
         wandb.log({"train_loss": train_loss / len(train_dl), 
                    "train_r2": train_r2 / len(train_dl),
                    "epoch": epoch})
-
+        
         # Validation loop
         model.eval()
         val_loss, val_r2 = 0, 0
@@ -196,7 +195,11 @@ if args.add is None:
     wandb.agent(sweep_id, function=train, count=NUM_RUNS)
 else:
     # Add an agent to the sweep
-    wandb.agent(args.add, function=train, count=NUM_RUNS)
+    wandb.agent(args.add, 
+                function=train, 
+                count=NUM_RUNS, 
+                project=wand_proj_name, 
+                entity=config["WANDB_ENTITY"])
 
 
 # ------------------------------------------------------------------------------

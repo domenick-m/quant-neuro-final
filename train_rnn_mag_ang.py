@@ -112,7 +112,6 @@ def train():
     # Give the run a new name to reflect the hyperparameters
     wandb.run.name = f'lr_{lr}_drop_{dropout}_layers_{n_layers}_' \
                      f'epochs_{n_epochs}_bsz_{batch_size}_hsz_{hidden_size}'
-    wandb.run.save()
 
     train_dl = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     val_dl = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)  
@@ -139,7 +138,7 @@ def train():
         for spikes, behavior in train_dl:
             # Forward pass through model
             pred_mag_ang = model(spikes.to(device))
-            pred_mag, pred_ang = torch.split(pred_mag_ang.detach(), 1, dim=-1)
+            pred_mag, pred_ang = torch.split(pred_mag_ang, 1, dim=-1)
             true_mag, true_ang = torch.split(behavior.to(device), 1, dim=-1)
 
             # Calculate loss            
@@ -209,7 +208,12 @@ if args.add is None:
     wandb.agent(sweep_id, function=train, count=NUM_RUNS)
 else:
     # Add an agent to the sweep
-    wandb.agent(args.add, function=train, count=NUM_RUNS)
+    wandb.agent(args.add, 
+                function=train, 
+                count=NUM_RUNS, 
+                project=wand_proj_name, 
+                entity=config["WANDB_ENTITY"])
+
 
 # ------------------------------------------------------------------------------
 # Get the best model from the sweep and rename / copy it
