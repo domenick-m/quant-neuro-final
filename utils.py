@@ -27,7 +27,7 @@ def prepare_datasets(config):
     # download dataset if it doesn't exist
     if not data_folder.exists():
         print(f'Dataset "{config["DATASET"]}" not downloaded! Downloading now.')
-        os.system(f'mkdir {data_folder}')
+        os.makedirs(data_folder)
         os.system(f'dandi download https://dandiarchive.org/dandiset/000{id} -o data')
 
     # get the path to the folder inside the data folder

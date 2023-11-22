@@ -15,13 +15,15 @@ from sklearn.model_selection import KFold
 from torcheval.metrics.functional import r2_score
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, TensorDataset
-from rnnmodel import RNNMODEL
+from rnn_model import RNNModel
+
 
 #%% ----------------------------------------------------------------------------
 # Setup
 # ------------------------------------------------------------------------------
 # Which GPU should we train on (if available)
-GPU = 0
+GPU = 2
+NUM_RUNS = 100
 
 # Load config parameters from file
 with open('./config.yaml') as f:
@@ -76,17 +78,15 @@ sweep_config = {
 # ------------------------------------------------------------------------------
 # Function to train GRU using random search over HPs
 # ------------------------------------------------------------------------------
-def train(config=None):
+def train():
     # Initialize a new wandb run
-    wandb.init(config=config, 
-               project=wand_proj_name, 
-               entity=config["WANDB_ENTITY"])
+    wandb.init()
     
     # Extract this runs hyperparameters
     lr = wandb.config.lr
     dropout = wandb.config.dropout
     n_layers = wandb.config.n_layers
-    n_epochs = wandb.config.rnn_epochs
+    n_epochs = wandb.config.n_epochs
     batch_size = wandb.config.batch_size
     hidden_size = wandb.config.hidden_size
 
@@ -98,7 +98,7 @@ def train(config=None):
     val_dl = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)  
 
     # Set up the RNN model with the current configuration
-    model = RNNMODEL(input_size=n_neurons, 
+    model = RNNModel(input_size=n_neurons, 
                      hidden_size=hidden_size,
                      num_layers=n_layers,
                      dropout=dropout)
@@ -109,9 +109,11 @@ def train(config=None):
 
     # Training loop
     for epoch in range(n_epochs):
+        print(f' Epoch: {epoch + 1} / {n_epochs}{" " * 20}', end='\r')
         model.train()
         train_loss, train_r2 = 0, 0
         for spikes, behavior in train_dl:
+            print(spikes.shape)
             # Forward pass through model
             pred_vel = model(spikes)
 
@@ -147,11 +149,11 @@ def train(config=None):
                    "val_r2": val_r2 / len(val_dl),
                    "epoch": epoch})
 
-    # Close wandb run
-    wandb.finish()
-
     # Save the trained model
     torch.save(model.state_dict(), os.path.join(runs_folder, f'{wandb.run.name}.pth'))
+
+    # Close wandb run
+    wandb.finish()
 
 
 # ------------------------------------------------------------------------------
@@ -162,7 +164,7 @@ sweep_id = wandb.sweep(sweep=sweep_config,
                        project=wand_proj_name, 
                        entity=config["WANDB_ENTITY"])
 # Start a sweep agent
-wandb.agent(sweep_id, function=train)
+wandb.agent(sweep_id, function=train, count=NUM_RUNS)
 
 
 # ------------------------------------------------------------------------------

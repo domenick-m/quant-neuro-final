@@ -6,6 +6,7 @@ import wandb
 import numpy as np
 from joblib import dump
 from utils import prepare_datasets
+from sklearn.metrics import r2_score, mean_squared_error
 from sklearn.linear_model import Ridge
 from sklearn.model_selection import KFold
 
@@ -36,37 +37,44 @@ kf = KFold(n_splits=5, shuffle=True, random_state=1)
 
 for alpha in config["RIDGE_ALPHAS"]:
     # Initialize lists to store loss values for each fold
-    train_losses = []
-    val_losses = []
+    train_losses, train_r2 = [], []
+    val_losses, val_r2 = [], []
 
     for train_index, val_index in kf.split(trainval_spikes):
         # Split data into training and validation for the current fold
-        X_train, X_val = trainval_spikes[train_index], trainval_spikes[val_index]
-        y_train, y_val = trainval_behavior[train_index], trainval_behavior[val_index]
+        train_spikes, val_spikes = trainval_spikes[train_index], trainval_spikes[val_index]
+        train_behavior, val_behavior = trainval_behavior[train_index], trainval_behavior[val_index]
 
         # Flatten data (trials, time, neurons) -> (trials * time, neurons)
-        X_train = X_train.reshape(-1, X_train.shape[-1])
-        X_val = X_val.reshape(-1, X_val.shape[-1])
-        y_train = y_train.reshape(-1, y_train.shape[-1])
-        y_val = y_val.reshape(-1, y_val.shape[-1])
+        train_spikes = train_spikes.reshape(-1, train_spikes.shape[-1])
+        val_spikes = val_spikes.reshape(-1, val_spikes.shape[-1])
+        train_behavior = train_behavior.reshape(-1, train_behavior.shape[-1])
+        val_behavior = val_behavior.reshape(-1, val_behavior.shape[-1])
 
         # Train the model
         model = Ridge(alpha=alpha)
-        model.fit(X_train, y_train)
+        model.fit(train_spikes, train_behavior)
 
-        # Calculate R^2 loss and store it
-        train_loss = model.score(X_train, y_train)
-        val_loss = model.score(X_val, y_val)
-        train_losses.append(train_loss)
-        val_losses.append(val_loss)
+        # Calculate loss and r2 score and store them
+        train_preds = model.predict(train_spikes)
+        val_preds = model.predict(val_spikes)
+        train_losses.append(mean_squared_error(train_behavior, train_preds))
+        val_losses.append(mean_squared_error(val_behavior, val_preds))
+        train_r2.append(r2_score(train_behavior, train_preds))
+        val_r2.append(r2_score(val_behavior, val_preds))
 
     # Calculate average losses
     avg_train_loss = np.mean(train_losses)
     avg_val_loss = np.mean(val_losses)
+    avg_train_r2 = np.mean(train_r2)
+    avg_val_r2 = np.mean(val_r2)
 
     # Log model to WandB
     wandb.init(project=wand_proj_name, entity=config["WANDB_ENTITY"], name=f'alpha_{alpha}')
-    wandb.log({'avg_train_loss': avg_train_loss, 'avg_val_loss': avg_val_loss})
+    wandb.log({'avg_train_loss': avg_train_loss, 
+               'avg_val_loss': avg_val_loss,
+               'avg_train_r2': avg_train_r2,
+               'avg_val_r2': avg_val_r2})
     wandb.finish()
 
     # Store the model and val loss for this alpha
