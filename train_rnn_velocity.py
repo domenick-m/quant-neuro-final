@@ -113,7 +113,6 @@ def train():
         model.train()
         train_loss, train_r2 = 0, 0
         for spikes, behavior in train_dl:
-            print(spikes.shape)
             # Forward pass through model
             pred_vel = model(spikes)
 
