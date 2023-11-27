@@ -104,8 +104,7 @@ def train():
     hidden_size = wandb.config.hidden_size
 
     # Give the run a new name to reflect the hyperparameters
-    wandb.run.name = f'lr_{lr}_drop_{dropout}_layers_{n_layers}_' \
-                     f'epochs_{n_epochs}_bsz_{batch_size}_hsz_{hidden_size}'
+    wandb.run.name = f'lr_{lr}_drop_{dropout}_layers_{n_layers}_hsz_{hidden_size}'
 
     train_dl = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     val_dl = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)  

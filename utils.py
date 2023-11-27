@@ -11,7 +11,6 @@ from nlb_tools.make_tensors import (
     make_eval_target_tensors, 
 )
 
-
 def prepare_datasets(config):
     DATASET_IDS = {
         'mc_maze': 128,

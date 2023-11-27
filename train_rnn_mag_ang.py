@@ -35,12 +35,14 @@ args = parser.parse_args()
 GPU = 1 if args.gpu is None else args.gpu
 NUM_RUNS = 100
 
+PRED_THETA = True
+
 # Load config parameters from file
 with open('./config.yaml') as f:
     config = yaml.load(f, Loader=yaml.FullLoader)
 
 # Log all runs to this wandb project
-wand_proj_name = f'{config["WANDB_BASE_PROJECT"]}_rnn_mag_ang'
+wand_proj_name = f'{config["WANDB_BASE_PROJECT"]}_rnn_mag_ang_theta'
 
 # Create folder to store runs locally if it doesn't exist
 runs_folder = './wandb_runs/rnn_mag_ang'
@@ -110,87 +112,134 @@ def train():
     hidden_size = wandb.config.hidden_size
 
     # Give the run a new name to reflect the hyperparameters
-    wandb.run.name = f'lr_{lr}_drop_{dropout}_layers_{n_layers}_' \
-                     f'epochs_{n_epochs}_bsz_{batch_size}_hsz_{hidden_size}'
+    wandb.run.name = f'lr_{lr}_drop_{dropout}_layers_{n_layers}_hsz_{hidden_size}'
 
     train_dl = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     val_dl = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)  
 
-    # Set up the RNN model with the current configuration
-    model = RNNModel(input_size=n_neurons, 
-                     hidden_size=hidden_size,
-                     num_layers=n_layers,
-                     dropout=dropout)
-    model = model.to(device)
+    # Set up the RNN models with the current configurations
+    mag_model = RNNModel(input_size=n_neurons, 
+                         hidden_size=hidden_size,
+                         num_layers=n_layers,
+                         dropout=dropout,
+                         n_outputs=1)
+    ang_model = RNNModel(input_size=n_neurons, 
+                         hidden_size=hidden_size,
+                         num_layers=n_layers,
+                         dropout=dropout,
+                         n_outputs=1 if PRED_THETA else 2)
+    mag_model = mag_model.to(device)
+    ang_model = ang_model.to(device)
 
     # Set up loss and optimizer
     mse_loss = nn.MSELoss()
-    optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
+    mag_optimizer = torch.optim.AdamW(mag_model.parameters(), lr=lr)
+    ang_optimizer = torch.optim.AdamW(ang_model.parameters(), lr=lr)
 
     # Save a checkpoint at the best validation loss
-    best_val_loss = float('inf')
+    best_mag_val_loss = float('inf')
+    best_ang_val_loss = float('inf')
 
     # Training loop
     for epoch in range(n_epochs):
         print(f' Epoch: {epoch + 1} / {n_epochs}{" " * 20}', end='\r')
-        model.train()
-        train_loss, train_r2 = 0, 0
+        mag_model.train()
+        ang_model.train()
+        mag_train_loss, ang_train_loss, train_r2 = 0, 0, 0
         for spikes, behavior in train_dl:
             # Forward pass through model
-            pred_mag_ang = model(spikes.to(device))
-            pred_mag, pred_ang = torch.split(pred_mag_ang, 1, dim=-1)
-            true_mag, true_ang = torch.split(behavior.to(device), 1, dim=-1)
+            spikes = spikes.to(device)
+            pred_mag = mag_model(spikes)
+            pred_ang = ang_model(spikes)
 
-            # Calculate loss            
+            # Calculate magnitude loss            
+            true_mag, true_ang = torch.split(behavior.to(device), 1, dim=-1)
             mag_loss = mse_loss(pred_mag, true_mag)
-            sin_loss = mse_loss(torch.sin(pred_ang), torch.sin(true_ang))
-            cos_loss = mse_loss(torch.cos(pred_ang), torch.cos(true_ang))
-            loss = mag_loss + sin_loss + cos_loss
+
+            # Calculate anglular loss
+            true_sin, true_cos = torch.sin(true_ang), torch.cos(true_ang)
+            pred_sin, pred_cos = (torch.sin(pred_ang), torch.cos(pred_ang)) if PRED_THETA else \
+                                 torch.split(pred_ang, 1, dim=-1) 
+            sin_loss = mse_loss(pred_sin, true_sin)
+            cos_loss = mse_loss(pred_cos, true_cos)
+            ang_loss = sin_loss + cos_loss
             
             # Calculate R^2
-            pred_vel = torch.cat([torch.cos(pred_ang), torch.sin(pred_ang)], axis=-1) * pred_mag
-            true_vel = torch.cat([torch.cos(true_ang), torch.sin(true_ang)], axis=-1) * true_mag
+            pred_vel = torch.cat([pred_cos, pred_sin], axis=-1) * pred_mag
+            true_vel = torch.cat([true_cos, true_sin], axis=-1) * true_mag
             r2 = r2_score(pred_vel.reshape((-1, 2)), true_vel.reshape((-1, 2)))
 
             # Update epoch metrics
-            train_loss += loss.cpu().detach().numpy()
+            mag_train_loss += mag_loss.cpu().detach().numpy()
+            ang_train_loss += ang_loss.cpu().detach().numpy()
             train_r2 += r2.cpu().detach().numpy()
 
             # Backpropagate and update weights
-            loss.backward()
-            optimizer.step()
-            optimizer.zero_grad(set_to_none=True)
+            mag_loss.backward()
+            mag_optimizer.step()
+            mag_optimizer.zero_grad(set_to_none=True)
+            ang_loss.backward()
+            ang_optimizer.step()
+            ang_optimizer.zero_grad(set_to_none=True)
 
         # Log the training loss to Weights and Biases
-        wandb.log({"train_loss": train_loss / len(train_dl), 
+        wandb.log({"mag_train_loss": mag_train_loss / len(train_dl), 
+                   "ang_train_loss": ang_train_loss / len(train_dl),
                    "train_r2": train_r2 / len(train_dl),
                    "epoch": epoch})
         
         # Validation loop
-        model.eval()
-        val_loss, val_r2 = 0, 0
+        mag_model.eval()
+        ang_model.eval()
+        mag_val_loss, ang_val_loss, val_r2 = 0, 0, 0
         with torch.no_grad():
             for spikes, behavior in val_dl:
-                spikes, behavior = spikes.to(device), behavior.to(device)
-                pred_vel = model(spikes)
-                loss = mse_loss(pred_vel, behavior)
-                r2 = r2_score(pred_vel.reshape((-1, 2)), behavior.reshape((-1, 2)))
-                val_loss += loss.cpu().numpy()
+                # Forward pass through model
+                spikes = spikes.to(device)
+                pred_mag = mag_model(spikes)
+                pred_ang = ang_model(spikes)
+
+                # Calculate magnitude loss            
+                true_mag, true_ang = torch.split(behavior.to(device), 1, dim=-1)
+                mag_loss = mse_loss(pred_mag, true_mag)
+
+                # Calculate anglular loss
+                true_sin, true_cos = torch.sin(true_ang), torch.cos(true_ang)
+                pred_sin, pred_cos = (torch.sin(pred_ang), torch.cos(pred_ang)) if PRED_THETA else \
+                                    torch.split(pred_ang, 1, dim=-1) 
+                sin_loss = mse_loss(pred_sin, true_sin)
+                cos_loss = mse_loss(pred_cos, true_cos)
+                ang_loss = sin_loss + cos_loss
+                
+                # Calculate R^2
+                pred_vel = torch.cat([pred_cos, pred_sin], axis=-1) * pred_mag
+                true_vel = torch.cat([true_cos, true_sin], axis=-1) * true_mag
+                r2 = r2_score(pred_vel.reshape((-1, 2)), true_vel.reshape((-1, 2)))
+
+                # Update epoch metrics
+                mag_val_loss += mag_loss.cpu().numpy()
+                ang_val_loss += ang_loss.cpu().numpy()
                 val_r2 += r2.cpu().numpy()
 
         # Log the validation loss to Weights and Biases
-        avg_val_loss = val_loss / len(val_dl)
-        wandb.log({"val_loss": avg_val_loss,  
+        avg_mag_val_loss = mag_val_loss / len(val_dl)
+        avg_ang_val_loss = ang_val_loss / len(val_dl)
+        wandb.log({"mag_val_loss": avg_mag_val_loss, 
+                   "ang_val_loss": avg_ang_val_loss, 
                    "val_r2": val_r2 / len(val_dl),
                    "epoch": epoch})
         
         # Save a checkpoint if this is the best validation loss
-        if avg_val_loss < best_val_loss:
-            best_val_loss = avg_val_loss
-            torch.save(model.state_dict(), os.path.join(runs_folder, f'{wandb.run.name}-best.pth'))
+        if avg_mag_val_loss < best_mag_val_loss:
+            best_mag_val_loss = avg_mag_val_loss
+            torch.save(mag_model.state_dict(), os.path.join(runs_folder, f'{wandb.run.name}-mag-best.pth'))
+        if avg_ang_val_loss < best_ang_val_loss:
+            best_ang_val_loss = avg_ang_val_loss
+            torch.save(ang_model.state_dict(), os.path.join(runs_folder, f'{wandb.run.name}-ang-best.pth'))
 
-    # Save the trained model
-    torch.save(model.state_dict(), os.path.join(runs_folder, f'{wandb.run.name}-last.pth'))
+    # Save the trained models
+    torch.save(mag_model.state_dict(), os.path.join(runs_folder, f'{wandb.run.name}-mag-last.pth'))
+    torch.save(ang_model.state_dict(), os.path.join(runs_folder, f'{wandb.run.name}-ang-last.pth'))
 
     # Close wandb run
     wandb.finish()
@@ -220,17 +269,24 @@ else:
 # ------------------------------------------------------------------------------
 api = wandb.Api()
 sweep = api.sweep(f'{config["WANDB_ENTITY"]}/{wand_proj_name}/{sweep_id}')
-lowest_val_loss = float('inf')
-best_run_name = None
+lowest_mag_val_loss = float('inf')
+lowest_ang_val_loss = float('inf')
+best_mag_run_name = None
+best_ang_run_name = None
 
 # Find the run with the lowest validation loss
 for run in sweep.runs:
-    val_loss = run.summary.get('val_loss', None)
-    if val_loss is not None and val_loss < lowest_val_loss:
-        lowest_val_loss = val_loss
-        best_run_name = run.name
+    mag_val_loss = run.summary.get('mag_val_loss', None)
+    ang_val_loss = run.summary.get('ang_val_loss', None)
+    if mag_val_loss is not None and mag_val_loss < lowest_mag_val_loss:
+        lowest_mag_val_loss = mag_val_loss
+        best_mag_run_name = run.name
+    if ang_val_loss is not None and ang_val_loss < lowest_ang_val_loss:
+        lowest_ang_val_loss = ang_val_loss
+        best_ang_run_name = run.name
 
 # Copy the best model from the runs folder
-best_model_path = os.path.join(runs_folder, f'{best_run_name}-best.pth')
-# best_model_path = os.path.join(runs_folder, f'{best_run_name}-last.pth')
-shutil.copy(best_model_path, 'rnn_model_mag_ang.pth')
+best_mag_model_path = os.path.join(runs_folder, f'{best_mag_run_name}-mag-best.pth')
+best_ang_model_path = os.path.join(runs_folder, f'{best_ang_run_name}-ang-best.pth')
+shutil.copy(best_mag_model_path, f'rnn_model_mag_{PRED_THETA}.pth')
+shutil.copy(best_ang_model_path, f'rnn_model_ang_{PRED_THETA}.pth')
