@@ -35,14 +35,14 @@ args = parser.parse_args()
 GPU = 1 if args.gpu is None else args.gpu
 NUM_RUNS = 100
 
-PRED_THETA = True
+PRED_THETA = False
 
 # Load config parameters from file
 with open('./config.yaml') as f:
     config = yaml.load(f, Loader=yaml.FullLoader)
 
 # Log all runs to this wandb project
-wand_proj_name = f'{config["WANDB_BASE_PROJECT"]}_rnn_mag_ang_theta'
+wand_proj_name = f'{config["WANDB_BASE_PROJECT"]}_rnn_mag_ang_no_theta_best'
 
 # Create folder to store runs locally if it doesn't exist
 runs_folder = './wandb_runs/rnn_mag_ang'
@@ -112,7 +112,7 @@ def train():
     hidden_size = wandb.config.hidden_size
 
     # Give the run a new name to reflect the hyperparameters
-    wandb.run.name = f'lr_{lr}_drop_{dropout}_layers_{n_layers}_hsz_{hidden_size}'
+    # wandb.run.name = f'lr_{lr}_drop_{dropout}_layers_{n_layers}_hsz_{hidden_size}'
 
     train_dl = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     val_dl = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)  

@@ -77,6 +77,10 @@ for alpha in config["RIDGE_ALPHAS"]:
                'avg_val_r2': avg_val_r2})
     wandb.finish()
 
+    # Train the model
+    model = Ridge(alpha=alpha)
+    model.fit(trainval_spikes, trainval_behavior)
+
     # Store the model and val loss for this alpha
     models.append(model)
     model_losses.append(avg_val_loss)

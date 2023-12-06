@@ -12,9 +12,12 @@ WANDB_ENTITY: 'domenick-m' # wandb username (change to yours)
 RIDGE_ALPHAS: [0.0001, 0.001, 0.01, 0.1, 1, 10, 100] # alphas for ridge regression
 
 # RNN Model Params
-RNN_LAYERS: [1, 2, 3] # number of layers to try for RNN
-RNN_HIDDEN_SIZE: [32, 64, 128, 256] # hidden size for RNN
-RNN_DROPOUT: [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7] # dropout for RNN
-RNN_LR: [0.0001, 0.001, 0.01] # learning rate for RNN
+RNN_LAYERS: [3] # number of layers to try for RNN
+# RNN_LAYERS: [1, 2, 3] # number of layers to try for RNN
+RNN_HIDDEN_SIZE: [256] # hidden size for RNN
+# RNN_HIDDEN_SIZE: [32, 64, 128, 256] # hidden size for RNN
+RNN_DROPOUT: [0.3] # dropout for RNN
+RNN_LR: [0.01] # learning rate for RNN
+# RNN_LR: [0.0001, 0.001, 0.01] # learning rate for RNN
 RNN_EPOCHS: [1000] # number of epochs to train RNN for
 RNN_BATCH_SIZE: [300] # batch size for RNN

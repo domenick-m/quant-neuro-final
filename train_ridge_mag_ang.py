@@ -18,10 +18,10 @@ from sklearn.model_selection import KFold
 with open('./config.yaml') as f:
     config = yaml.load(f, Loader=yaml.FullLoader)
 
-PRED_THETA = False
+PRED_THETA = True
 
 # Log all runs to this wandb project
-wand_proj_name = f'{config["WANDB_BASE_PROJECT"]}_ridge_mag_ang_no_theta'
+wand_proj_name = f'{config["WANDB_BASE_PROJECT"]}_ridge_mag_ang_theta'
 
 # Prepare datasets (extract, smooth, lag, etc...)
 trainval, test = prepare_datasets(config)
@@ -40,15 +40,15 @@ trainval_behavior = np.concatenate([magnitude, angle_rads] if PRED_THETA else \
 # Train Ridge Regression Models with K-Fold Cross-Validation
 # ------------------------------------------------------------------------------
 # Define lists to store best performing model
-models, model_losses = [], []
+mag_models, ang_models, mag_model_losses, ang_model_losses = [], [], [], []
 
 # Define the number of folds for cross-validation
 kf = KFold(n_splits=5, shuffle=True, random_state=1)
 
 for alpha in config["RIDGE_ALPHAS"]:
     # Initialize lists to store loss values for each fold
-    train_losses, train_r2 = [], []
-    val_losses, val_r2 = [], []
+    train_mag_losses, train_ang_losses, train_r2 = [], [], []
+    val_mag_losses, val_ang_losses, val_r2 = [], [], []
 
     for train_index, val_index in kf.split(trainval_spikes):
         # Split data into training and validation for the current fold
@@ -62,24 +62,26 @@ for alpha in config["RIDGE_ALPHAS"]:
         val_behavior = val_behavior.reshape(-1, val_behavior.shape[-1])
 
         # Train the model
-        model = Ridge(alpha=alpha)
-        model.fit(train_spikes, train_behavior)
+        mag_model = Ridge(alpha=alpha)
+        mag_model.fit(train_spikes, train_behavior[:, 0:1])
+        ang_model = Ridge(alpha=alpha)
+        ang_model.fit(train_spikes, train_behavior[:, 1:])
 
-        # Get model outputs and split into mag and angle
-        train_preds = model.predict(train_spikes)
-        val_preds = model.predict(val_spikes)
-        if PRED_THETA:
-            train_mag, train_ang = np.split(train_preds, 2, axis=-1)
-            val_mag, val_ang = np.split(val_preds, 2, axis=-1)
-        else:
-            train_mag, train_sin, train_cos = np.split(train_preds, 3, axis=-1)
-            val_mag, val_sin, val_cos = np.split(val_preds, 3, axis=-1)
-            train_ang = np.arctan2(train_sin, train_cos)
-            val_ang = np.arctan2(val_sin, val_cos)
+        # Get model outputs
+        train_mag = mag_model.predict(train_spikes)
+        train_ang = ang_model.predict(train_spikes)
+        val_mag = mag_model.predict(val_spikes)
+        val_ang = ang_model.predict(val_spikes)
+
+        if not PRED_THETA:
+            train_sin, train_cos = np.split(train_ang, 2, axis=-1)
+            val_sin, val_cos = np.split(val_ang, 2, axis=-1)
 
         # magnitude loss
         train_mag_loss = np.mean((train_mag - train_behavior[:, 0]) ** 2)
         val_mag_loss = np.mean((val_mag - val_behavior[:, 0]) ** 2)
+        train_mag_losses.append(train_mag_loss)
+        val_mag_losses.append(val_mag_loss)
 
         # angle loss
         if PRED_THETA:
@@ -87,15 +89,15 @@ for alpha in config["RIDGE_ALPHAS"]:
             train_cos_loss = np.mean((np.cos(train_ang) - np.cos(train_behavior[:, 1])) ** 2)
             val_sin_loss = np.mean((np.sin(val_ang) - np.sin(val_behavior[:, 1])) ** 2)
             val_cos_loss = np.mean((np.cos(val_ang) - np.cos(val_behavior[:, 1])) ** 2)
-            train_losses.append(train_mag_loss + train_sin_loss + train_cos_loss)
-            val_losses.append(val_mag_loss + val_sin_loss + val_cos_loss)
+            train_ang_losses.append(train_sin_loss + train_cos_loss)
+            val_ang_losses.append(val_sin_loss + val_cos_loss)
         else:
             train_sin_loss = np.mean((train_sin - np.sin(train_behavior[:, 1])) ** 2)
             train_cos_loss = np.mean((train_cos - np.cos(train_behavior[:, 2])) ** 2)
             val_sin_loss = np.mean((val_sin - np.sin(val_behavior[:, 1])) ** 2)
             val_cos_loss = np.mean((val_cos - np.cos(val_behavior[:, 2])) ** 2)
-            train_losses.append(train_mag_loss + train_sin_loss + train_cos_loss)
-            val_losses.append(val_mag_loss + val_sin_loss + val_cos_loss)
+            train_ang_losses.append(train_sin_loss + train_cos_loss)
+            val_ang_losses.append(val_sin_loss + val_cos_loss)
 
         # R^2 Loss
         if PRED_THETA:
@@ -108,40 +110,45 @@ for alpha in config["RIDGE_ALPHAS"]:
             pred_train_y_vel = train_mag * train_sin
             pred_val_x_vel = val_mag * val_cos
             pred_val_y_vel = val_mag * val_sin
-
         train_x_vel = train_behavior[:, 0] * np.cos(train_behavior[:, 1])
         train_y_vel = train_behavior[:, 0] * np.sin(train_behavior[:, 1])
         val_x_vel = val_behavior[:, 0] * np.cos(val_behavior[:, 1])
         val_y_vel = val_behavior[:, 0] * np.sin(val_behavior[:, 1])
-
         pred_train_vel = np.concatenate([pred_train_x_vel, pred_train_y_vel], axis=-1)
         pred_val_vel = np.concatenate([pred_val_x_vel, pred_val_y_vel], axis=-1)
         train_vel = np.concatenate([np.expand_dims(train_x_vel, 1), 
                                     np.expand_dims(train_y_vel, 1)], axis=1)
         val_vel = np.concatenate([np.expand_dims(val_x_vel, 1), 
                                   np.expand_dims(val_y_vel, 1)], axis=1)
-        
         train_r2.append(r2_score(train_vel, pred_train_vel))
         val_r2.append(r2_score(val_vel, pred_val_vel))
 
     # Calculate average losses
-    avg_train_loss = np.mean(train_losses)
-    avg_val_loss = np.mean(val_losses)
+    avg_mag_train_loss = np.mean(train_mag_losses)
+    avg_ang_train_loss = np.mean(train_ang_losses)
+    avg_mag_val_loss = np.mean(val_mag_losses)
+    avg_ang_val_loss = np.mean(val_ang_losses)
     avg_train_r2 = np.mean(train_r2)
     avg_val_r2 = np.mean(val_r2)
 
     # Log model to WandB
     wandb.init(project=wand_proj_name, entity=config["WANDB_ENTITY"], name=f'alpha_{alpha}')
-    wandb.log({'avg_train_loss': avg_train_loss, 
-               'avg_val_loss': avg_val_loss,
+    wandb.log({'avg_mag_train_loss': avg_mag_train_loss, 
+               'avg_ang_train_loss': avg_ang_train_loss,
+               'avg_mag_val_loss': avg_mag_val_loss,
+               'avg_ang_val_loss': avg_ang_val_loss,
                'avg_train_r2': avg_train_r2,
                'avg_val_r2': avg_val_r2})
     wandb.finish()
 
     # Store the model and val loss for this alpha
-    models.append(model)
-    model_losses.append(avg_val_loss)
+    mag_models.append(mag_model)
+    ang_models.append(ang_model)
+    mag_model_losses.append(avg_mag_val_loss)
+    ang_model_losses.append(avg_ang_val_loss)
 
 # Save the model to disk with the best validation loss
-best_model = models[np.argmin(model_losses)]
-dump(best_model, 'ridge_model_mag_angle.joblib')
+best_mag_model = mag_models[np.argmin(mag_model_losses)]
+best_ang_model = ang_models[np.argmin(ang_model_losses)]
+dump(best_mag_model, f'ridge_model_mag_{PRED_THETA}.joblib')
+dump(best_ang_model, f'ridge_model_ang_{PRED_THETA}.joblib')
